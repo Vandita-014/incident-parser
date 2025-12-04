@@ -54,20 +54,35 @@ class ParseResponse(BaseModel):
 
 
 def extract_timestamp(text: str) -> str:
-    """Extract and normalize timestamp from text"""
-    time_patterns = [
-        r'(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)',
-        r'(\d{1,2}):(\d{2})',
-        r'at\s+(\d{1,2}):(\d{2})',
-    ]
-
+    """Extract time from text in HH:MM:SS format"""
     now = datetime.now()
-    default_time = now.strftime("%Y-%m-%dT%H:%M:%S")
+    default_time = now.strftime("%H:%M:%S")
 
-    for pattern in time_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            return now.strftime("%Y-%m-%dT") + match.group(0).replace(" ", "").upper()
+    pm_pattern = r'(\d{1,2}):(\d{2})\s*(PM|pm)'
+    am_pattern = r'(\d{1,2}):(\d{2})\s*(AM|am)'
+    time_pattern = r'(\d{1,2}):(\d{2})'
+
+    pm_match = re.search(pm_pattern, text, re.IGNORECASE)
+    if pm_match:
+        hour = int(pm_match.group(1))
+        minute = pm_match.group(2)
+        if hour != 12:
+            hour = (hour + 12) % 24
+        return f"{hour:02d}:{minute}:00"
+
+    am_match = re.search(am_pattern, text, re.IGNORECASE)
+    if am_match:
+        hour = int(am_match.group(1))
+        minute = am_match.group(2)
+        if hour == 12:
+            hour = 0
+        return f"{hour:02d}:{minute}:00"
+
+    time_match = re.search(time_pattern, text)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = time_match.group(2)
+        return f"{hour:02d}:{minute}:00"
 
     return default_time
 
@@ -101,10 +116,10 @@ REQUIRED FIELDS:
   * Extract the exact component name from the text
   * If multiple components, list the primary one
   
-- Timestamp: ISO 8601 format (YYYY-MM-DDTHH:MM:SS)
-  * Extract time from text if mentioned
-  * Use current date if only time is given
-  * Format: "2024-01-15T18:30:00"
+- Timestamp: Time ONLY in HH:MM:SS format (NO DATE)
+  * Extract time from text if mentioned (e.g., "6:30 PM" becomes "18:30:00")
+  * Return ONLY time, never include date
+  * Format: "18:30:00" (NOT "2024-01-15T18:30:00")
   
 - Suspected_Cause: Brief description of what likely caused the issue
   * Extract from text (e.g., "migration script", "deployment", "network issue")
@@ -122,7 +137,7 @@ Output:
 {
   "Severity": "High",
   "Component": "Database US-East-1",
-  "Timestamp": "2024-01-15T18:30:00",
+  "Timestamp": "18:30:00",
   "Suspected_Cause": "Migration script deployed by Sarah",
   "Impact_Count": 500
 }
@@ -171,8 +186,15 @@ def parse_groq_response(response_text: str) -> dict:
         else:
             data["Impact_Count"] = int(data["Impact_Count"])
 
-        if not re.match(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', data["Timestamp"]):
-            data["Timestamp"] = extract_timestamp(data.get("Timestamp", ""))
+        timestamp = data["Timestamp"]
+        if not re.match(r'^\d{2}:\d{2}:\d{2}$', timestamp):
+            iso_match = re.match(
+                r'\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2})', timestamp)
+            if iso_match:
+                data["Timestamp"] = iso_match.group(1)
+            else:
+                data["Timestamp"] = extract_timestamp(
+                    data.get("Timestamp", ""))
 
         if not data["Component"] or len(data["Component"].strip()) == 0:
             data["Component"] = "Unknown Component"
